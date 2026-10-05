@@ -1,0 +1,17 @@
+node_modules/
+data/
+context/
+backups/
+.config.*.json
+.config.*.json.backup
+.flows.json.backup
+flows_cred.json
+*.db
+*.db-shm
+*.db-wal
+.sessions.json
+environment
+flows-vps.json
+.flows-vps.json.backup
+flows-vps_cred.json
+.role
