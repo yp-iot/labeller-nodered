@@ -24,6 +24,8 @@ const REASON_TIPS = {
 const SIM_W = { 'Label skew': 22, 'Missing label': 10, 'Wrong label': 3, 'OCR misread': 20, 'Barcode unreadable': 14, 'Wrinkle / bubble': 21, 'Cap / seal': 10 };
 const rnd = (a, b) => a + Math.random() * (b - a);
 const r1 = x => Math.round(x * 10) / 10;
+const gauss = () => (Math.random() + Math.random() + Math.random() - 1.5) / 0.5;
+const synth = cfg.mode !== 'real';   // demo + sim: fill missing inspection details (flagged est)
 function pick(w) { let t = 0; for (const k in w) t += w[k]; let r = Math.random() * t; for (const k in w) { r -= w[k]; if (r <= 0) return k; } return 'Label skew'; }
 function valid(t) { const x = tags[t]; return !!x && (x.src === 'di' || now - x.ts < 10000); }
 function fresh(t) { const x = tags[t]; return !!x && now - x.ts <= cfg.detailFreshMs; }
@@ -76,6 +78,37 @@ if (msg.topic === 'batch') {
     else if (c.action === 'end') startBatch({ id: '' });
     node.log('batch ' + c.action + ' ' + (c.id || '') + ' by ' + (c.by || 'dashboard'));
 }
+const newMode = msg.topic === 'mode' && msg.payload && msg.payload.mode;
+let resetCounts = false;
+if (['real', 'demo', 'sim'].includes(newMode) && newMode !== cfg.mode) {
+    resetCounts = (newMode === 'sim') !== (cfg.mode === 'sim');   // real <-> demo keep the same DI0/DI1 counts
+    cfg.mode = newMode; cfg.simulate = newMode === 'sim';
+    flow.set('labcfg', cfg);
+    flow.set('labMode', newMode, 'file');
+    flow.set('labDemoIdle', false);
+    M.lastRealTs = now;
+    node.log('data mode -> ' + newMode);
+}
+// restart the live counters (hour / shift / batch windows, feed, alerts); SQLite history and trace are kept
+function resetCounters() {
+    flow.set('tags', {});
+    flow.set('tagmapVer', Date.now());   // Mapper drops its cached raw values
+    if (P.batch) {
+        const b = P.batch;
+        startBatch({ id: b.id, product: b.product, target: b.target, note: b.note });
+        P.batch.seq = b.seq === undefined ? b.total : b.seq;   // trace serials continue within the batch number
+    }
+    P.shift = blank({ id: sh.id, name: sh.name, operator: sh.operator, start: sh.start, startTxt: sh.startTxt, endTxt: sh.endTxt });
+    Object.assign(M, { buckets: [], feed: [], itemTs: [], stops: [], alerts: {}, insights: [], pendingNG: 0, lastItemTs: 0, wasRunning: null, statusSince: now, lastInsight: 0 });
+}
+if (resetCounts) resetCounters();   // count source changed (sim <-> machine): simulated values never mix with real ones
+if (msg.topic === 'reset') { resetCounters(); node.log('counters reset from dashboard'); }
+if (msg.topic === 'settings' && msg.payload && msg.payload.idealPpm) {
+    cfg.idealPpm = msg.payload.idealPpm;
+    flow.set('labcfg', cfg);
+    flow.set('labIdealPpm', cfg.idealPpm, 'file');
+    node.log('rated speed set to ' + cfg.idealPpm + ' PPM');
+}
 if (!P.batch) startBatch({ id: cfg.batch });
 if (cfg.batchSource === 'plc' && valid('batch_no') && tv('batch_no') && tv('batch_no') !== P.batch.id) startBatch({ id: tv('batch_no') });
 if (P.batch.id && !P.batch.inDb) batchIns(P.batch);
@@ -102,23 +135,24 @@ function oee(w) {
 function addItem(ng) {
     P.seq++;
     let est = false;
-    const take = (t, synth) => { if (fresh(t) && tv(t) !== undefined && tv(t) !== '') return tv(t); est = true; return synth(); };
-    let reason = null;
-    if (ng) {
-        reason = fresh('reject_code') && tv('reject_code') !== 'None' ? tv('reject_code') : (est = true, pick(SIM_W));
-    }
+    // demo/sim: missing details are estimated (flagged est). Real machine: missing details stay empty, never invented.
+    const take = (t, gen) => { if (fresh(t) && tv(t) !== undefined && tv(t) !== '') return tv(t); if (!synth) return null; est = true; return gen(); };
+    if (synth) demoDrift();
+    const reason = ng ? ngReason() : null;
+    if (ng && synth && !(fresh('reject_code') && tv('reject_code') !== 'None')) est = true;
     const conf = take('ai_conf', () => ng ? rnd(84, 99) : rnd(96.5, 99.9));
-    const offset = take('label_offset', () => reason === 'Label skew' ? rnd(1.6, 2.3) : (Math.random() - 0.5) * 0.6);
-    const ocr = take('ocr_text', () => 'LOT ' + String(P.batch.id).replace(/^LOT-?/i, '') + ' EXP 10/2028');
-    const code = fresh('barcode') ? tv('barcode') : (est = true, '95560' + String(1234500 + P.seq % 100000).padStart(8, '0'));
+    const offset = take('label_offset', () => reason === 'Label skew' ? skewOffset() : M.drift + gauss() * 0.22);
+    const ocr = take('ocr_text', () => 'LOT ' + String(P.batch.id).replace(/^LOT-?/i, '') + ' EXP 10/2028') || '';
+    const code = take('barcode', () => '95560' + String(1234500 + P.seq % 100000).padStart(8, '0')) || '';
     P.batch.seq = (P.batch.seq === undefined ? P.batch.total : P.batch.seq) + 1;   // serial = position in batch (continues the counter)
     const tid = (P.batch.id || 'NOBATCH') + '-' + String(P.batch.seq).padStart(6, '0');   // trace ID = batch + serial in batch
-    const it = { tid, seq: P.seq, t: now, ok: !ng, reason, conf: r1(conf), offset: Math.round(offset * 100) / 100, ocr, code, est };
+    const it = { tid, seq: P.seq, t: now, ok: !ng, reason, conf: conf === null ? null : r1(conf), offset: offset === null ? null : Math.round(offset * 100) / 100, ocr, code, est,
+        sh: P.shift.id, bs: P.batch.start, bt: B.t };   // window keys, so a late DI1 reject can be booked on this item
     for (const w of [P.shift, P.batch, B]) {
         w.total++;
         if (ng) { w.ng++; w.reasons[reason] = (w.reasons[reason] || 0) + 1; } else w.ok++;
     }
-    B.offSum += it.offset; B.offN++;
+    if (it.offset !== null) { B.offSum += it.offset; B.offN++; }
     P.labelUsed += reason === 'Missing label' ? 0 : 1;
     P.ribbonUsed += 1;
     M.feed.unshift(it); if (M.feed.length > 20) M.feed.pop();
@@ -126,15 +160,57 @@ function addItem(ng) {
     M.lastItemTs = now;
     // every product -> audit trace (written in the 60 s batch; queue capped so a DB outage can't eat RAM)
     M.q.items = M.q.items || [];
-    M.q.items.push([now, tid, P.seq, P.batch.id || 'NOBATCH', P.batch.seq, ng ? 0 : 1, reason, it.conf, it.offset, ocr, code, est ? 1 : 0, cfg.simulate ? 1 : 0, P.shift.id, P.shift.operator]);
+    M.q.items.push([now, tid, P.seq, P.batch.id || 'NOBATCH', P.batch.seq, ng ? 0 : 1, reason, it.conf, it.offset, ocr, code, est ? 1 : 0, msg.origin === 'sim' ? 1 : cfg.mode === 'demo' ? 2 : 0, P.shift.id, P.shift.operator]);   // sim: 0 real, 1 simulated, 2 real count + demo details
     if (M.q.items.length > 20000) M.q.items.splice(0, M.q.items.length - 20000);
     if (ng) { M.q.ng.push({ ts: now, seq: it.seq, reason, conf: it.conf, offset: it.offset, ocr, code, est: est ? 1 : 0, shift: P.shift.id, batch: P.batch.id }); if (M.q.ng.length > 2000) M.q.ng.shift(); }
 }
 
+function ngReason() {
+    if (fresh('reject_code') && tv('reject_code') !== 'None') return tv('reject_code');
+    if (!synth) return 'Reject';   // real DI1 only says "rejected", not why
+    const w = Object.assign({}, SIM_W);
+    w['Label skew'] += Math.max(0, Math.abs(M.drift || 0) - 0.7) * 0.09 * 2500;   // drifting applicator -> skew rejects
+    return pick(w);
+}
+// demo details: label position creeps per product, then the "operator" corrects it (same behaviour as the simulator)
+function demoDrift() {
+    if (M.driftRate === undefined) { M.drift = 0; M.driftRate = 0.0012; }
+    M.drift += M.driftRate;
+    if (Math.abs(M.drift) > 1.35 || Math.random() < 1 / 3600) { M.drift = 0; M.driftRate = rnd(0.0006, 0.0018) * (Math.random() < 0.5 ? -1 : 1); }
+}
+const skewOffset = () => Math.sign(M.drift || 1) * rnd(cfg.offsetTolMm + 0.1, cfg.offsetTolMm + 0.9);
+// DI1 reject pulse that arrives after its DI0 trigger: book it on the newest OK product within ngPairMs
+function markLateNg() {
+    const it = M.feed.find(x => x.ok && now - x.t <= (cfg.ngPairMs || 3000));
+    if (!it) return false;
+    const reason = ngReason();
+    it.ok = false; it.reason = reason;
+    if (it.est) {   // estimated details were made for a good part: redo them for a reject
+        it.conf = r1(rnd(84, 99));
+        if (reason === 'Label skew') it.offset = Math.round(skewOffset() * 100) / 100;
+    }
+    const wins = [P.shift.id === it.sh && P.shift, P.batch.start === it.bs && P.batch, M.buckets.find(b => b.t === it.bt)];
+    for (const w of wins) if (w) { w.ok--; w.ng++; w.reasons[reason] = (w.reasons[reason] || 0) + 1; }
+    const row = (M.q.items || []).find(r => r[1] === it.tid && r[2] === it.seq);
+    if (row) { row[5] = 0; row[6] = reason; row[7] = it.conf; row[8] = it.offset; }
+    else sqlNow.push('UPDATE items SET ok=0, reason=' + q(reason) + ', conf=' + q(it.conf) + ', offset=' + q(it.offset) + ' WHERE tid=' + q(it.tid) + ' AND ts=' + it.t + ';');
+    M.q.ng.push({ ts: now, seq: it.seq, reason, conf: it.conf, offset: it.offset, ocr: it.ocr, code: it.code, est: it.est ? 1 : 0, shift: P.shift.id, batch: P.batch.id });
+    if (M.q.ng.length > 2000) M.q.ng.shift();
+    return true;
+}
+
 if (msg.topic === 'tags') {
+    const pairMs = cfg.ngPairMs || 3000;
+    const totalHere = msg.payload.some(u => u.tag === 'count_total' && u.delta);
     for (const u of msg.payload) {
-        if (u.tag === 'count_ng') M.pendingNG = Math.min(M.pendingNG + (u.delta || 0), 500);
-        else if (u.tag === 'count_total') {
+        if (u.tag === 'count_ng') {
+            // same message as the trigger (simulator, PLC counters) -> applies to those items;
+            // on its own (real DI1) -> the product just triggered, else held for the next trigger
+            for (let i = 0; i < Math.min(u.delta || 0, 500); i++)
+                if (totalHere || !markLateNg()) { M.pendingNG = Math.min(M.pendingNG + 1, 500); M.pendingNgTs = now; }
+        } else if (u.tag === 'count_total') {
+            if (msg.origin !== 'sim' && u.delta) M.lastRealTs = now;
+            if (M.pendingNG && now - (M.pendingNgTs || 0) > pairMs) M.pendingNG = 0;   // stale reject with no product
             for (let i = 0; i < Math.min(u.delta || 0, 500); i++) {
                 const ng = M.pendingNG > 0; if (ng) M.pendingNG--;
                 addItem(ng);
@@ -147,10 +223,13 @@ if (msg.topic === 'tags') {
 }
 
 // ================= tick (1 s) =================
+// demo fallback: simulator drives the line while the machine has been idle for demoIdleS
+const idle = cfg.mode === 'demo' && !!cfg.demoFallback && now - (M.lastRealTs || 0) > (cfg.demoIdleS || 30) * 1000;
+if (idle !== !!flow.get('labDemoIdle')) { flow.set('labDemoIdle', idle); flow.set('tagmapVer', Date.now()); node.log('demo fallback ' + (idle ? 'on (machine idle)' : 'off (machine running)')); }
 const dt = Math.min(5000, Math.max(0, now - M.lastTick));
 M.lastTick = now;
 const fault = valid('fault') ? !!tv('fault') : false;
-const running = !fault && ((valid('running') && !!tv('running')) || now - M.lastItemTs < 6000);   // products flowing = running, even if no run signal is wired
+const running = !fault && ((valid('running') && !!tv('running')) || now - M.lastItemTs < (cfg.stopAfterS || 6) * 1000);   // products flowing = running, even if no run signal is wired
 const status = fault ? 'fault' : running ? 'running' : 'stopped';
 if (M.wasRunning !== null && M.wasStatus !== status) M.statusSince = now;
 if (M.wasRunning && !running) { M.stops.push(now); }
@@ -252,10 +331,10 @@ if (now - M.lastInsight >= 10000) {
 // ---------- snapshot ----------
 const snap = {
     type: 'snap', t: now,
-    line: { name: cfg.line, machine: cfg.machine, product: P.batch.product || cfg.product, status, statusSince: M.statusSince, speed: r1(speed), ideal: cfg.idealPpm,
+    line: { title: cfg.title || 'SoloSense AI', name: cfg.line, machine: cfg.machine, product: P.batch.product || cfg.product, status, statusSince: M.statusSince, speed: r1(speed), ideal: cfg.idealPpm,
         operator: P.shift.operator, shift: { name: P.shift.name, start: P.shift.startTxt, end: P.shift.endTxt }, batch: { id: P.batch.id, product: P.batch.product || cfg.product, target: P.batch.target || 0, note: P.batch.note || '', operator: P.batch.operator || '', start: P.batch.start },
         batchSource: cfg.batchSource || 'dashboard', pinRequired: !!cfg.batchPin, products: cfg.products || [],
-        simulate: !!cfg.simulate, provider: cfg.chatProvider, ngAlarmPct: cfg.ngAlarmPct, offsetTol: cfg.offsetTolMm },
+        simulate: !!cfg.simulate, mode: cfg.mode, demoIdle: !!flow.get('labDemoIdle'), provider: cfg.chatProvider, ngAlarmPct: cfg.ngAlarmPct, offsetTol: cfg.offsetTolMm },
     win,
     trend: M.buckets.slice(-60).map(b => ({ t: b.t, total: b.total, ng: b.ng, ngPct: b.total ? r1(100 * b.ng / b.total) : null, off: b.offN ? Math.round(100 * b.offSum / b.offN) / 100 : null })),
     feed: M.feed.slice(0, 12),

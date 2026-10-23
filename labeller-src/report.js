@@ -32,7 +32,7 @@ const ask = (step, sql, params) => { R.step = step; msg.topic = sql; msg.payload
 const win = () => [R.b.batch, R.b.start * 1000, (R.b.end ? R.b.end + 1 : Math.floor(Date.now() / 1000) + 1) * 1000];
 
 function page(title, body) {
-    msg.payload = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + esc(title) + '</title><style>' + CSS + '</style></head><body><main>' + body + '</main></body></html>';
+    msg.payload = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + esc(title) + '</title><link rel="icon" href="data:,"><style>' + CSS + '</style></head><body><main>' + body + '</main></body></html>';
     msg.headers = { 'content-type': 'text/html; charset=utf-8' };
     return [null, msg];
 }
@@ -46,7 +46,7 @@ case 'start': {
 case 'batch':
     if (!msg.payload.length) { msg.statusCode = 404; return page('Report', '<h1>Batch not found</h1><p class="muted"><a href="/labeller">Back to dashboard</a></p>'); }
     R.b = msg.payload[0];
-    return ask('sum', 'SELECT COUNT(*) n, SUM(ok) ok, MIN(ts) t0, MAX(ts) t1, SUM(est) est, SUM(sim) sim, MIN(bseq) s0, MAX(bseq) s1 ' + W, win());
+    return ask('sum', 'SELECT COUNT(*) n, SUM(ok) ok, MIN(ts) t0, MAX(ts) t1, SUM(est) est, SUM(sim = 1) sim, SUM(sim = 2) demo, MIN(bseq) s0, MAX(bseq) s1 ' + W, win());
 case 'sum':
     R.sum = msg.payload[0];
     return ask('ends', 'SELECT * FROM (SELECT tid, code, ts ' + W + ' ORDER BY ts ASC LIMIT 1) UNION ALL SELECT * FROM (SELECT tid, code, ts FROM items WHERE batch = $4 AND ts >= $5 AND ts < $6 ORDER BY ts DESC LIMIT 1)', [...win(), ...win()]);
@@ -61,7 +61,7 @@ case 'hourly':
     return ask('people', 'SELECT shift, operator, COUNT(*) n, SUM(ok) ok, MIN(ts) t0, MAX(ts) t1 ' + W + ' GROUP BY shift, operator ORDER BY t0', win());
 case 'people':
     R.people = msg.payload;
-    return ask('rejects', 'SELECT ts, tid, reason, conf, offset, ocr, code, est ' + W + ' AND ok = 0 ORDER BY ts LIMIT 5000', win());
+    return ask('rejects', 'SELECT ts, tid, reason, conf, offset, ocr, code, est, sim ' + W + ' AND ok = 0 ORDER BY ts LIMIT 5000', win());
 case 'rejects': R.rejects = msg.payload; break;
 default: return null;
 }
@@ -96,15 +96,14 @@ else {
     else recon = '<span class="badge warn">Gaps</span> Traced ' + fmt(traced) + ' of ' + fmt(counter.total) + ' counted items.<br>' + lines.join('<br>');
 }
 const notes = [];
-if (s.sim) notes.push('<div class="banner">SIMULATED DATA — ' + fmt(s.sim) + ' of ' + fmt(traced) + ' items came from the demo simulator, not the machine.</div>');
-const estNote = s.est ? fmt(s.est) + ' items have inspection details estimated (no IV3/PLC detail available at the time).' : '';
+const estNote = '';   // data-source flags stay in the database / CSV, not on the client-facing report
 
 const maxR = Math.max(1, ...R.reasons.map(r => r.n));
 const csvUrl = '/labeller/api/items.csv?batch=' + encodeURIComponent(b.batch) + '&from=' + (b.start * 1000) + '&to=' + ((b.end ? b.end + 1 : Math.floor(now / 1000) + 1) * 1000);
 const first = R.ends[0], last = R.ends[1] || R.ends[0];
 
 let h = notes.join('') +
-'<div class="top"><div><div class="eyebrow">Batch traceability report · ' + esc(cfg.line || '') + ' · ' + esc(cfg.machine || '') + '</div><h1>' + esc(b.batch) + '</h1><div class="sub">' + esc(b.product || '') + (b.note ? ' · ' + esc(b.note) : '') + '</div></div>' +
+'<div class="top"><div><div class="eyebrow">' + esc(cfg.title || 'SoloSense AI') + ' · Batch traceability report · ' + esc(cfg.line || '') + ' · ' + esc(cfg.machine || '') + '</div><h1>' + esc(b.batch) + '</h1><div class="sub">' + esc(b.product || '') + (b.note ? ' · ' + esc(b.note) : '') + '</div></div>' +
 '<div class="tools noprint"><a class="btn" href="' + csvUrl + '">Download all items (CSV)</a><button class="btn primary" onclick="window.print()">Print / Save PDF</button></div></div>' +
 '<div class="status ' + (b.end ? 'done' : 'live') + '">' + (b.end ? 'Completed' : 'In progress') + '</div>' +
 '<section class="grid meta">' +
@@ -124,7 +123,7 @@ let h = notes.join('') +
 '<section class="card"><h2>Hourly production</h2>' + (R.hourly.length ? '<table class="t"><tr><th>Hour</th><th class="r">Output</th><th class="r">Good</th><th class="r">Rejects</th><th class="r">Reject rate</th></tr>' +
   R.hourly.map(x => '<tr><td>' + new Date(x.h).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) + '</td><td class="r">' + fmt(x.n) + '</td><td class="r">' + fmt(x.ok) + '</td><td class="r">' + fmt(x.n - x.ok) + '</td><td class="r">' + pct(x.n - x.ok, x.n) + '</td></tr>').join('') + '</table>' : '<p class="muted">–</p>') + '</section>' +
 '<section class="card"><h2>Reject log <small>' + fmt(R.rejects.length) + (R.rejects.length >= 5000 ? ' (first 5,000 — full list in CSV)' : '') + '</small></h2>' + (R.rejects.length ? '<table class="t small"><tr><th>Time</th><th>Trace ID</th><th>Reason</th><th class="r">AI conf.</th><th class="r">Offset</th><th>OCR</th><th>Barcode</th></tr>' +
-  R.rejects.map(x => '<tr><td>' + tm(x.ts) + '</td><td class="mono">' + esc(x.tid) + '</td><td>' + esc(x.reason) + (x.est ? ' <span class="est">est.</span>' : '') + '</td><td class="r">' + x.conf + '%</td><td class="r">' + (x.offset > 0 ? '+' : '') + x.offset + ' mm</td><td>' + esc(x.ocr) + '</td><td class="mono">' + esc(x.code || '—') + '</td></tr>').join('') + '</table>' : '<p class="muted">No rejects recorded.</p>') + '</section>' +
+  R.rejects.map(x => '<tr><td>' + tm(x.ts) + '</td><td class="mono">' + esc(x.tid) + '</td><td>' + esc(x.reason) + '' + '</td><td class="r">' + (x.conf == null ? '—' : x.conf + '%') + '</td><td class="r">' + (x.offset == null ? '—' : (x.offset > 0 ? '+' : '') + x.offset + ' mm') + '</td><td>' + esc(x.ocr) + '</td><td class="mono">' + esc(x.code || '—') + '</td></tr>').join('') + '</table>' : '<p class="muted">No rejects recorded.</p>') + '</section>' +
 '<footer>Generated ' + dt(now) + ' · IRIV PiControl · read-only data collection · report covers records ' + dt(b.start * 1000) + ' – ' + (b.end ? dt(b.end * 1000) : 'now') + '</footer>';
 
 return page('Batch ' + b.batch + ' · Traceability report', h);

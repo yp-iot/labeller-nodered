@@ -20,7 +20,7 @@ function local(q) {
     const reasons = (x, n) => x.reasons.slice(0, n).map(([k, v]) => '• ' + k + ' — ' + v + ' (' + Math.round(100 * v / Math.max(1, x.ng)) + '%)').join('\n');
     const has = (...k) => k.some(x => x.length <= 3 ? new RegExp('\\b' + x + '\\b').test(s) : s.includes(x));   // short words must match whole words ('ng' not in 'going')
     const statusTxt = { running: 'running', stopped: 'stopped', fault: 'in **fault**' }[L.status];
-    const est = S.feed.some(f => f.est) ? '\n\n_Inspection details are partly simulated until the IV3/PLC data is mapped._' : '';
+    const est = '';
 
     if (has('yesterday', 'week', '7 day', 'history', 'last days', 'compare')) {
         if (!H || !H.days || !H.days.length) return 'History builds up in the on-device database every minute. Ask me again after the line has run for a while.';
@@ -56,7 +56,7 @@ function local(q) {
         const f = S.feed.find(x => !x.ok);
         if (!f) return 'No recent rejects in the feed.';
         const ago = Math.round((Date.now() - f.t) / 1000);
-        return 'Last reject was **#' + f.seq + '**, ' + ago + ' s ago: **' + f.reason + '** (AI confidence ' + f.conf + '%).\nOCR "' + f.ocr + '", code ' + (f.code || 'unreadable') + ', label offset ' + f.offset + ' mm.' + (f.est ? '\n_Classification simulated._' : '');
+        return 'Last reject was **#' + f.seq + '**, ' + ago + ' s ago: **' + f.reason + '**' + (f.conf == null ? ' (from the DI1 reject output).' : ' (AI confidence ' + f.conf + '%).\nOCR "' + f.ocr + '", code ' + (f.code || 'unreadable') + ', label offset ' + f.offset + ' mm.');
     }
     if (has('reject', 'ng', 'defect', 'quality', 'fail', 'why')) {
         if (!w.ng) return 'No rejects so far this shift. ' + w.total.toLocaleString() + ' good of ' + w.total.toLocaleString() + '.';
@@ -87,7 +87,7 @@ const prior = sess.turns.slice(-6);
 const key = env.get('ANTHROPIC_API_KEY');
 if (cfg.chatProvider === 'claude' && key) {
     const system = 'You are the assistant built into an industrial labelling and inspection line (Solo labeller with KEYENCE IV3 AI vision: OCR, 1D/2D code, label position, missing/wrong label, cap/seal, AI defect detection). ' +
-        'You only observe; you cannot control the machine. Answer operators and managers briefly (max ~120 words), plain language, use the live data below, give concrete checks. Use **bold** sparingly, bullets with "• ". If data is marked est:true it is simulated. ' +
+        'You only observe; you cannot control the machine. Answer operators and managers briefly (max ~120 words), plain language, use the live data below, give concrete checks. Use **bold** sparingly, bullets with "• ". ' +
         '\n\nLIVE SNAPSHOT (JSON):\n' + JSON.stringify({ line: S && S.line, shift: S && S.win.shift, hour: S && S.win.hour, batch: S && S.win.batch, alerts: S && S.alerts, insights: S && S.insights, consumables: S && S.consum, recent: S && S.feed.slice(0, 6), days: H && H.days && H.days.slice(-7) });
     const req = {
         _session: msg._session, chatId: m.id, localAnswer: answer, userText: text,

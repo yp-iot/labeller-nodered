@@ -4,7 +4,9 @@
 const cfg = flow.get('labcfg');
 const map = flow.get('tagmap');
 if (!cfg || !map) return null;
-if (((msg.origin || 'real') === 'sim') !== !!cfg.simulate) return null;   // only one data world at a time
+// one data world at a time: real in real/demo mode, sim in sim mode (or demo fallback while the machine is idle)
+const fromSim = (msg.origin || 'real') === 'sim';
+if (fromSim ? !(cfg.mode === 'sim' || (cfg.mode === 'demo' && flow.get('labDemoIdle'))) : cfg.mode === 'sim') return null;
 
 const ver = flow.get('tagmapVer');
 let idx = context.get('idx');
@@ -18,6 +20,7 @@ if (!idx || idx.ver !== ver) {
     });
     context.set('idx', idx);
     context.set('last', {});
+    context.set('raw', {});   // new tag map or data mode: forget old raw values
 }
 
 const cache = context.get('raw') || {};

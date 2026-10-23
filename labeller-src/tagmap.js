@@ -7,8 +7,10 @@
 // Order matters for counters: keep count_ng BEFORE count_total.
 flow.set('tagmap', [
     // --- production counters (DI now; swap to the PLC rows below when ready) ---
-    { tag: 'count_ng',      src: 'di',  key: 'DI0', type: 'bool', kind: 'pulse', edge: 'rise', when: 'DI1', desc: 'IV3 NG output at product trigger' },
-    { tag: 'count_total',   src: 'di',  key: 'DI0', type: 'bool', kind: 'pulse', edge: 'rise', desc: 'Product sensor' },
+    // DI0 = machine trigger output (one pulse per product), DI1 = reject output (one pulse per rejected product).
+    // A DI1 pulse is paired with the DI0 product within CONFIG.ngPairMs (before or after the trigger).
+    { tag: 'count_ng',      src: 'di',  key: 'DI1', type: 'bool', kind: 'pulse', edge: 'rise', desc: 'Reject output (DI1)' },
+    { tag: 'count_total',   src: 'di',  key: 'DI0', type: 'bool', kind: 'pulse', edge: 'rise', desc: 'Machine trigger output (DI0)' },
     // { tag: 'count_ng',    src: 'plc', key: 'D102', type: 'uint32', kind: 'counter' },
     // { tag: 'count_total', src: 'plc', key: 'D100', type: 'uint32', kind: 'counter' },
 

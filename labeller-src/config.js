@@ -1,6 +1,10 @@
 // ===== EDIT THIS: line, shifts, analytics, storage, chat =====
 // Read-only monitoring: nothing on this tab writes to the machine.
+// data mode, switched from the dashboard (/labeller?setup) and kept across restarts:
+//   'real' = DI0/DI1 counts, no invented details | 'demo' = DI0/DI1 counts + demo inspection details | 'sim' = all simulated
+const MODE = (m => ['real', 'demo', 'sim'].includes(m) ? m : 'sim' /* default until someone picks */)(flow.get('labMode', 'file'));
 flow.set('labcfg', {
+    title: 'SoloSense AI',         // dashboard heading + browser tab
     line: 'Line 1',
     machine: 'Solo Labelling & Inspection',
     product: 'Hand Sanitizer 500 ml',
@@ -8,8 +12,13 @@ flow.set('labcfg', {
     batchSource: 'dashboard',      // 'dashboard' = operators start/end batches on the page | 'plc' = follow the batch_no tag
     batchPin: '',                  // supervisor PIN for starting/ending batches ('' = no PIN)
     products: ['Hand Sanitizer 500 ml', 'Hand Sanitizer 1 L', 'Liquid Soap 250 ml'],   // quick picks in the New batch form
-    simulate: true,                // true = simulator feeds the tag map, false = real DI / PLC
-    idealPpm: 120,                 // rated speed in PPM (products per minute) for Performance
+    mode: MODE,
+    simulate: MODE === 'sim',      // derived, do not edit
+    demoFallback: false,           // demo mode: simulator drives the counts while the machine is idle (booth screens)
+    demoIdleS: 30,                 //   ... after this many seconds without a DI0 product
+    ngPairMs: 3000,                // a DI1 reject pulse belongs to the DI0 product within this many ms
+    stopAfterS: 6,                 // no DI0 product for this long (and no running signal) = stopped
+    idealPpm: Number(flow.get('labIdealPpm', 'file')) || 120,   // rated speed in PPM for Performance; set on the dashboard (Settings), 120 until then
     ngAlarmPct: 3.0,               // NG % treated as abnormal
     labelRollQty: 3000,            // labels per roll (estimates when no label_remain tag)
     ribbonQty: 9000,               // prints per ribbon

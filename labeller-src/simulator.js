@@ -4,7 +4,7 @@
 // msg.topic 'burst' = 90 s defect burst (demo button in the editor).
 const cfg = flow.get('labcfg');
 const map = flow.get('tagmap');
-if (!cfg || !map || !cfg.simulate) { node.status({ fill: 'grey', shape: 'ring', text: 'off (simulate=false)' }); return null; }
+if (!cfg || !map || !(cfg.mode === 'sim' || (cfg.mode === 'demo' && flow.get('labDemoIdle')))) { node.status({ fill: 'grey', shape: 'ring', text: 'off (' + (cfg && cfg.mode) + ' mode)' }); return null; }
 const now = Date.now();
 const S = context.get('s') || {
     state: 'run', until: 0, acc: 0, total: 0, ng: 0, seq: 0,
@@ -43,6 +43,7 @@ function encCounters(item) {
     for (const r of map) {
         if (r.kind === 'pulse') {
             if (r.when) out.push({ src: r.src, key: r.when, value: (r.tag === 'count_ng' ? item.ng : 0) ? 1 : 0 });
+            else if (r.tag === 'count_ng' && !item.ng) continue;   // own reject input (DI1): pulse only for NG items
             edges.add(r.src + '|' + r.key + '|' + (r.edge || 'rise'));
         }
     }
