@@ -1,15 +1,15 @@
-// ===== DI trigger tester: digital stand-in for the machine's DI0 / DI1 outputs =====
-// Sends the same messages the GPIO tab sends (topic gpio/13 = DI0 trigger, gpio/17 = DI1 reject) into the DI adapter,
+// ===== DI tester: digital stand-in for the machine's DI0 (OK) / DI1 (NG) outputs =====
+// Sends the same messages the GPIO tab sends (topic gpio/13 = DI0 OK, gpio/17 = DI1 NG) into the DI adapter,
 // so the dashboard counts them exactly like the real machine. Works in "Real machine" and "Demo" mode.
-// payload: {cmd:'start', ppm, rejectPct, rejectDelayMs, pulseMs} | {cmd:'stop'} | {cmd:'one', ng:true|false}
+// payload: {cmd:'start', ppm, rejectPct, pulseMs} | {cmd:'stop'} | {cmd:'one', ng:true|false}
 const cfg = flow.get('labcfg') || {};
 const c = msg.payload || {};
-const st = context.get('st') || { on: false, ppm: 120, rejectPct: 3, rejectDelayMs: 150, pulseMs: 40, n: 0, ng: 0 };
+const st = context.get('st') || { on: false, ppm: 120, rejectPct: 3, pulseMs: 40, n: 0, ng: 0 };
 
 const pin = (gpio, v) => node.send({ topic: 'gpio/' + gpio, payload: v });
 function product(ng) {
-    pin(13, 1); setTimeout(() => pin(13, 0), st.pulseMs);                      // DI0 trigger pulse
-    if (ng) setTimeout(() => { pin(17, 1); setTimeout(() => pin(17, 0), st.pulseMs); }, st.rejectDelayMs);   // DI1 reject pulse
+    const g = ng ? 17 : 13;   // one pulse per product: DI1 = NG, DI0 = OK
+    pin(g, 1); setTimeout(() => pin(g, 0), st.pulseMs);
     st.n++; if (ng) st.ng++;
     context.set('st', st);
     show();
@@ -26,7 +26,7 @@ function loop() {   // next product after one cycle at the set speed, +/-6% jitt
 
 clearTimeout(context.get('timer'));
 if (c.cmd === 'start') {
-    for (const k of ['ppm', 'rejectPct', 'rejectDelayMs', 'pulseMs']) if (Number.isFinite(Number(c[k])) && c[k] !== '') st[k] = Number(c[k]);
+    for (const k of ['ppm', 'rejectPct', 'pulseMs']) if (Number.isFinite(Number(c[k])) && c[k] !== '') st[k] = Number(c[k]);
     st.ppm = Math.min(600, Math.max(1, st.ppm));
     st.on = true; context.set('st', st); loop();
 } else if (c.cmd === 'stop') {

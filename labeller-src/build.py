@@ -147,16 +147,16 @@ add({'id': 'lab_catch', 'type': 'catch', 'name': 'tab errors', 'scope': None, 'u
 debug('lab_errdbg', 'Labeller errors', 1020, 730, complete='true')
 
 # ---------- 8. DI trigger tester ----------
-comment('lab_c8', '⑧ DI TRIGGER TESTER — fake DI0 trigger / DI1 reject pulses', 'Click the inject buttons to test the dashboard without the machine.\n'
-        'Pulses enter the DI adapter exactly like the GPIO inputs (gpio/13 = DI0, gpio/17 = DI1), so they count in Real machine and Demo mode (not Simulate).\n'
-        'Edit the "start" injects to change PPM, reject %, reject delay after the trigger (ms) and pulse width (ms).', 250, 1130)
+comment('lab_c8', '⑧ DI TESTER — fake DI0 OK / DI1 NG pulses', 'Click the inject buttons to test the dashboard without the machine.\n'
+        'Pulses enter the DI adapter exactly like the GPIO inputs (gpio/13 = DI0 OK, gpio/17 = DI1 NG), so they count in Real machine and Demo mode (not Simulate).\n'
+        'Edit the "start" injects to change PPM, reject % and pulse width (ms).', 250, 1130)
 T = [['lab_tester']]
-inject('lab_t_start', '▶ start line 120 PPM, 3% reject', 210, 1180, T, payload='{"cmd":"start","ppm":120,"rejectPct":3,"rejectDelayMs":150,"pulseMs":40}', ptype='json')
-inject('lab_t_slow', '▶ start line 60 PPM, 8% reject', 210, 1220, T, payload='{"cmd":"start","ppm":60,"rejectPct":8,"rejectDelayMs":150,"pulseMs":40}', ptype='json')
+inject('lab_t_start', '▶ start line 120 PPM, 3% reject', 210, 1180, T, payload='{"cmd":"start","ppm":120,"rejectPct":3,"pulseMs":40}', ptype='json')
+inject('lab_t_slow', '▶ start line 60 PPM, 8% reject', 210, 1220, T, payload='{"cmd":"start","ppm":60,"rejectPct":8,"pulseMs":40}', ptype='json')
 inject('lab_t_stop', '■ stop line', 160, 1260, T, payload='{"cmd":"stop"}', ptype='json')
-inject('lab_t_ok', '1 product (OK)', 170, 1300, T, payload='{"cmd":"one","ng":false}', ptype='json')
-inject('lab_t_ng', '1 product (reject)', 180, 1340, T, payload='{"cmd":"one","ng":true}', ptype='json')
-fn('lab_tester', 'DI trigger tester', src('tester.js'), 500, 1260, [['lab_diad']],
+inject('lab_t_ok', '1 product OK (DI0)', 170, 1300, T, payload='{"cmd":"one","ng":false}', ptype='json')
+inject('lab_t_ng', '1 product NG (DI1)', 180, 1340, T, payload='{"cmd":"one","ng":true}', ptype='json')
+fn('lab_tester', 'DI tester', src('tester.js'), 500, 1260, [['lab_diad']],
    initialize="const s = context.get('st'); if (s) { s.on = false; context.set('st', s); }   // redeploy = line stopped",
    finalize="clearTimeout(context.get('timer'));")
 

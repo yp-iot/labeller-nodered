@@ -146,8 +146,7 @@ function addItem(ng) {
     const code = take('barcode', () => '95560' + String(1234500 + P.seq % 100000).padStart(8, '0')) || '';
     P.batch.seq = (P.batch.seq === undefined ? P.batch.total : P.batch.seq) + 1;   // serial = position in batch (continues the counter)
     const tid = (P.batch.id || 'NOBATCH') + '-' + String(P.batch.seq).padStart(6, '0');   // trace ID = batch + serial in batch
-    const it = { tid, seq: P.seq, t: now, ok: !ng, reason, conf: conf === null ? null : r1(conf), offset: offset === null ? null : Math.round(offset * 100) / 100, ocr, code, est,
-        sh: P.shift.id, bs: P.batch.start, bt: B.t };   // window keys, so a late DI1 reject can be booked on this item
+    const it = { tid, seq: P.seq, t: now, ok: !ng, reason, conf: conf === null ? null : r1(conf), offset: offset === null ? null : Math.round(offset * 100) / 100, ocr, code, est };
     for (const w of [P.shift, P.batch, B]) {
         w.total++;
         if (ng) { w.ng++; w.reasons[reason] = (w.reasons[reason] || 0) + 1; } else w.ok++;
@@ -179,39 +178,21 @@ function demoDrift() {
     if (Math.abs(M.drift) > 1.35 || Math.random() < 1 / 3600) { M.drift = 0; M.driftRate = rnd(0.0006, 0.0018) * (Math.random() < 0.5 ? -1 : 1); }
 }
 const skewOffset = () => Math.sign(M.drift || 1) * rnd(cfg.offsetTolMm + 0.1, cfg.offsetTolMm + 0.9);
-// DI1 reject pulse that arrives after its DI0 trigger: book it on the newest OK product within ngPairMs
-function markLateNg() {
-    const it = M.feed.find(x => x.ok && now - x.t <= (cfg.ngPairMs || 3000));
-    if (!it) return false;
-    const reason = ngReason();
-    it.ok = false; it.reason = reason;
-    if (it.est) {   // estimated details were made for a good part: redo them for a reject
-        it.conf = r1(rnd(84, 99));
-        if (reason === 'Label skew') it.offset = Math.round(skewOffset() * 100) / 100;
-    }
-    const wins = [P.shift.id === it.sh && P.shift, P.batch.start === it.bs && P.batch, M.buckets.find(b => b.t === it.bt)];
-    for (const w of wins) if (w) { w.ok--; w.ng++; w.reasons[reason] = (w.reasons[reason] || 0) + 1; }
-    const row = (M.q.items || []).find(r => r[1] === it.tid && r[2] === it.seq);
-    if (row) { row[5] = 0; row[6] = reason; row[7] = it.conf; row[8] = it.offset; }
-    else sqlNow.push('UPDATE items SET ok=0, reason=' + q(reason) + ', conf=' + q(it.conf) + ', offset=' + q(it.offset) + ' WHERE tid=' + q(it.tid) + ' AND ts=' + it.t + ';');
-    M.q.ng.push({ ts: now, seq: it.seq, reason, conf: it.conf, offset: it.offset, ocr: it.ocr, code: it.code, est: it.est ? 1 : 0, shift: P.shift.id, batch: P.batch.id });
-    if (M.q.ng.length > 2000) M.q.ng.shift();
-    return true;
-}
 
 if (msg.topic === 'tags') {
-    const pairMs = cfg.ngPairMs || 3000;
     const totalHere = msg.payload.some(u => u.tag === 'count_total' && u.delta);
     for (const u of msg.payload) {
-        if (u.tag === 'count_ng') {
-            // same message as the trigger (simulator, PLC counters) -> applies to those items;
-            // on its own (real DI1) -> the product just triggered, else held for the next trigger
-            for (let i = 0; i < Math.min(u.delta || 0, 500); i++)
-                if (totalHere || !markLateNg()) { M.pendingNG = Math.min(M.pendingNG + 1, 500); M.pendingNgTs = now; }
+        const n = Math.min(u.delta || 0, 500);
+        if (msg.origin !== 'sim' && n && ['count_ok', 'count_ng', 'count_total'].includes(u.tag)) M.lastRealTs = now;
+        if (u.tag === 'count_ok') {
+            for (let i = 0; i < n; i++) addItem(false);   // DI0 / OK counter: one good product each
+        } else if (u.tag === 'count_ng') {
+            // with count_total in the same message (simulator, PLC total counter) the rejects are part of those items;
+            // otherwise (DI1 / NG counter) each one is a rejected product of its own
+            if (totalHere) M.pendingNG = Math.min(M.pendingNG + n, 500);
+            else for (let i = 0; i < n; i++) addItem(true);
         } else if (u.tag === 'count_total') {
-            if (msg.origin !== 'sim' && u.delta) M.lastRealTs = now;
-            if (M.pendingNG && now - (M.pendingNgTs || 0) > pairMs) M.pendingNG = 0;   // stale reject with no product
-            for (let i = 0; i < Math.min(u.delta || 0, 500); i++) {
+            for (let i = 0; i < n; i++) {
                 const ng = M.pendingNG > 0; if (ng) M.pendingNG--;
                 addItem(ng);
             }

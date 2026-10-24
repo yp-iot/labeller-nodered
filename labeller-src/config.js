@@ -15,9 +15,8 @@ flow.set('labcfg', {
     mode: MODE,
     simulate: MODE === 'sim',      // derived, do not edit
     demoFallback: false,           // demo mode: simulator drives the counts while the machine is idle (booth screens)
-    demoIdleS: 30,                 //   ... after this many seconds without a DI0 product
-    ngPairMs: 3000,                // a DI1 reject pulse belongs to the DI0 product within this many ms
-    stopAfterS: 6,                 // no DI0 product for this long (and no running signal) = stopped
+    demoIdleS: 30,                 //   ... after this many seconds without a DI0/DI1 product
+    stopAfterS: 6,                 // no DI0/DI1 product for this long (and no running signal) = stopped
     idealPpm: Number(flow.get('labIdealPpm', 'file')) || 120,   // rated speed in PPM for Performance; set on the dashboard (Settings), 120 until then
     ngAlarmPct: 3.0,               // NG % treated as abnormal
     labelRollQty: 3000,            // labels per roll (estimates when no label_remain tag)

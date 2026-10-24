@@ -4,13 +4,12 @@
 // kind: 'counter' -> cumulative register, analytics uses the increase
 //       'pulse'   -> counts one per edge of a DI/bit (edge:'rise'|'fall'); 'when' = only count if that key is on
 // 32-bit types use two words (key, key+1, low word first). ascii uses 'words' words, 2 chars each.
-// Order matters for counters: keep count_ng BEFORE count_total.
+// Counters: count_ok + count_ng (each pulse/increase = one product), or count_total + count_ng (NG is part of total; keep count_ng BEFORE count_total).
 flow.set('tagmap', [
     // --- production counters (DI now; swap to the PLC rows below when ready) ---
-    // DI0 = machine trigger output (one pulse per product), DI1 = reject output (one pulse per rejected product).
-    // A DI1 pulse is paired with the DI0 product within CONFIG.ngPairMs (before or after the trigger).
-    { tag: 'count_ng',      src: 'di',  key: 'DI1', type: 'bool', kind: 'pulse', edge: 'rise', desc: 'Reject output (DI1)' },
-    { tag: 'count_total',   src: 'di',  key: 'DI0', type: 'bool', kind: 'pulse', edge: 'rise', desc: 'Machine trigger output (DI0)' },
+    // DI0 = OK output (one pulse per good product), DI1 = NG output (one pulse per rejected product). Total = OK + NG.
+    { tag: 'count_ok',      src: 'di',  key: 'DI0', type: 'bool', kind: 'pulse', edge: 'rise', desc: 'OK output (DI0)' },
+    { tag: 'count_ng',      src: 'di',  key: 'DI1', type: 'bool', kind: 'pulse', edge: 'rise', desc: 'NG output (DI1)' },
     // { tag: 'count_ng',    src: 'plc', key: 'D102', type: 'uint32', kind: 'counter' },
     // { tag: 'count_total', src: 'plc', key: 'D100', type: 'uint32', kind: 'counter' },
 

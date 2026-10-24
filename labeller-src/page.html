@@ -398,7 +398,7 @@ $('setClose').onclick = closeSettings;
 $('setBg').onclick = e => { if (e.target === $('setBg')) closeSettings(); };
 $('setForm').onsubmit = e => { e.preventDefault(); $('setErr').textContent = ''; send({type:'settings', idealPpm: Number($('setPpm').value), pin: $('setPin').value}); };
 $('setReset').onclick = () => { if (!resetArm) { armReset(true); setTimeout(() => armReset(false), 4000); return; } armReset(false); send({type:'reset', pin: $('setPin').value}); };
-const MODE_TXT = { real: 'REAL MACHINE (DI0 = trigger, DI1 = reject, no inspection details)', demo: 'DEMO (real DI0/DI1 counts + demo inspection details)', sim: 'SIMULATED data' };
+const MODE_TXT = { real: 'REAL MACHINE (DI0 = OK, DI1 = NG, no inspection details)', demo: 'DEMO (real DI0/DI1 counts + demo inspection details)', sim: 'SIMULATED data' };
 document.querySelectorAll('#modeSeg button').forEach(b => {
   b.onclick = () => {
     const to = b.dataset.mode, from = S && modeOf(S.line);

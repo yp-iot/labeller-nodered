@@ -44,13 +44,14 @@ function encCounters(item) {
         if (r.kind === 'pulse') {
             if (r.when) out.push({ src: r.src, key: r.when, value: (r.tag === 'count_ng' ? item.ng : 0) ? 1 : 0 });
             else if (r.tag === 'count_ng' && !item.ng) continue;   // own reject input (DI1): pulse only for NG items
+            else if (r.tag === 'count_ok' && item.ng) continue;    // own OK input (DI0): pulse only for good items
             edges.add(r.src + '|' + r.key + '|' + (r.edge || 'rise'));
         }
     }
     for (const e of edges) { const [src, key, edge] = e.split('|'); const a = edge === 'rise' ? 1 : 0; out.push({ src, key, value: a }, { src, key, value: 1 - a }); }
     for (const r of map) {
         if (r.kind === 'counter') {
-            const val = r.tag === 'count_ng' ? S.ng : r.tag === 'count_total' ? S.total : null;
+            const val = r.tag === 'count_ng' ? S.ng : r.tag === 'count_total' ? S.total : r.tag === 'count_ok' ? S.total - S.ng : null;
             if (val !== null) out.push(...encRow(r, val));
         }
     }
