@@ -332,7 +332,7 @@ footer{margin-top:28px;font-size:12px;color:var(--text3);display:flex;justify-co
       <p class="setnote">Output, NG, OEE and PPM restart at 0 for the hour, shift and batch. History, trace and batch reports are kept.</p>
       <div class="actions"><button class="btn danger" id="setReset">Reset counters</button></div>
       <div class="sect"><h4>Data source</h4></div>
-      <div class="seg" id="modeSeg" role="group" aria-label="Data source"><button data-mode="real" aria-pressed="false">Real machine</button><button data-mode="demo" aria-pressed="false">Demo</button><button data-mode="sim" aria-pressed="false">Simulate</button></div>
+      <div class="seg" id="modeSeg" role="group" aria-label="Data source"><button data-mode="real" aria-pressed="false">Real machine</button><button data-mode="demo" aria-pressed="false">Demo</button><button data-mode="sim" aria-pressed="false">Simulate</button><button data-mode="mirror" aria-pressed="false" hidden>Cloud copy</button></div>
     </div>
   </div>
   <div class="sheet-bg" id="traceBg" hidden>
@@ -398,13 +398,13 @@ $('setClose').onclick = closeSettings;
 $('setBg').onclick = e => { if (e.target === $('setBg')) closeSettings(); };
 $('setForm').onsubmit = e => { e.preventDefault(); $('setErr').textContent = ''; send({type:'settings', idealPpm: Number($('setPpm').value), pin: $('setPin').value}); };
 $('setReset').onclick = () => { if (!resetArm) { armReset(true); setTimeout(() => armReset(false), 4000); return; } armReset(false); send({type:'reset', pin: $('setPin').value}); };
-const MODE_TXT = { real: 'REAL MACHINE (DI0 = OK, DI1 = NG, no inspection details)', demo: 'DEMO (real DI0/DI1 counts + demo inspection details)', sim: 'SIMULATED data' };
+const MODE_TXT = { real: 'REAL MACHINE (DI0 = OK, DI1 = NG, no inspection details)', demo: 'DEMO (real DI0/DI1 counts + demo inspection details)', sim: 'SIMULATED data', mirror: 'CLOUD COPY of the machine (live data sent by its Pi)' };
 document.querySelectorAll('#modeSeg button').forEach(b => {
   b.onclick = () => {
     const to = b.dataset.mode, from = S && modeOf(S.line);
     if (!S || to === from) return;
-    const reset = (to === 'sim') !== (from === 'sim');
-    if (!confirm('Switch to ' + MODE_TXT[to] + '?' + (reset ? '\n\nShift and batch counters restart from zero so real and simulated counts are never mixed.' : '\n\nCounts continue (same DI0/DI1 data).'))) return;
+    const mirror = to === 'mirror' || from === 'mirror', reset = (to === 'sim') !== (from === 'sim');
+    if (!confirm('Switch to ' + MODE_TXT[to] + '?' + (mirror ? '\n\nThe data stored on this server is cleared; in Cloud copy it is reloaded from the machine.' : reset ? '\n\nShift and batch counters restart from zero so real and simulated counts are never mixed.' : '\n\nCounts continue (same DI0/DI1 data).'))) return;
     const pin = S.line.pinRequired && !$('setPin').value ? prompt('Supervisor PIN') : ''; if (pin === null) return;
     send({type:'mode', mode: b.dataset.mode, pin: pin || $('setPin').value});
   };
@@ -466,11 +466,12 @@ function render(){
   $('machine').textContent = L.machine + ' · ' + L.name; $('line').textContent = L.title; document.title = L.title + ' · ' + L.name;
   $('product').textContent = L.product; $('batch').textContent = L.batch.id || 'No batch';
   if (!$('sheetBg').hidden) renderCur(); $('shift').textContent = L.shift.name + '  ' + L.shift.start + '–' + L.shift.end; $('operator').textContent = L.operator;
-  const st = $('status'); st.className = 'status ' + L.status;
-  $('statusTxt').textContent = {running:'Running',stopped:'Stopped',fault:'Fault'}[L.status] + ' · ' + ago(Date.now()-L.statusSince);
+  const off = L.mirror && !L.mirror.online;   // cloud copy: the machine's Pi stopped sending
+  const st = $('status'); st.className = 'status ' + (off ? 'stopped' : L.status);
+  $('statusTxt').textContent = off ? 'Machine offline · last data ' + ago(Date.now()-L.mirror.lastTs) + ' ago' : {running:'Running',stopped:'Stopped',fault:'Fault'}[L.status] + ' · ' + ago(Date.now()-L.statusSince);
   $('provider').textContent = L.provider === 'claude' ? 'Claude' : 'On-device';
-  document.querySelectorAll('#modeSeg button').forEach(x => x.setAttribute('aria-pressed', x.dataset.mode === modeOf(L)));
-  $('foot').textContent = 'Read-only monitoring · IRIV PiControl · Node-RED';
+  document.querySelectorAll('#modeSeg button').forEach(x => { x.setAttribute('aria-pressed', x.dataset.mode === modeOf(L)); if (x.dataset.mode === 'mirror') x.hidden = !L.mirrorAvail; });
+  $('foot').textContent = (L.mirror ? 'Cloud copy of the machine' : 'Read-only monitoring') + ' · IRIV PiControl · Node-RED';
 
   let w, scope;
   if (W === 'days') {
@@ -556,6 +557,7 @@ function connect(){
 }
 // ---------- batches ----------
 const send = o => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+setInterval(() => send({type:'ping'}), 20000);   // cloud copy: tells the machine someone is watching (faster live updates)
 let endArm = false, endTimer = null;
 function dur(ms){ if (ms == null || ms < 0) return '–'; const m = Math.round(ms/60000); return m < 60 ? m + ' min' : Math.floor(m/60) + ' h ' + String(m%60).padStart(2,'0'); }
 function when(t){ const d = new Date(t), today = new Date().toDateString() === d.toDateString();

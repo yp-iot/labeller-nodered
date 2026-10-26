@@ -1,4 +1,5 @@
 // ===== Browser message router =====
+// in : browser websocket messages (ping every 20 s = someone is watching)
 // out1: chat/hello -> Chat   out2: validated batch / data-mode / settings / reset command -> Analytics
 // out3: batch list query -> SQLite   out4: reply to this browser   out5: audit trace search
 let m;
@@ -7,14 +8,19 @@ const cfg = flow.get('labcfg') || {};
 const reply = o => [null, null, null, { _session: msg._session, payload: JSON.stringify(o) }, null];
 const err = e => reply({ type: 'batch:err', error: e });
 
+if (m.type === 'ping' || m.type === 'hello') flow.set('labViewerTs', Date.now());   // VPS mirror: someone is watching
+if (m.type === 'ping') return null;
 if (m.type === 'chat' || m.type === 'hello') return [msg, null, null, null, null];
 
-if (m.type === 'mode') {   // data source: real machine (DI0/DI1) or simulator
-    if (!['real', 'demo', 'sim'].includes(m.mode)) return null;
+if (m.type === 'mode') {   // data source: real machine (DI0/DI1), simulator, or (VPS) mirror of the machine
+    if (!['real', 'demo', 'sim'].includes(m.mode) && !(m.mode === 'mirror' && flow.get('labMirrorAvail'))) return null;
     if (cfg.batchPin && String(m.pin || '') !== String(cfg.batchPin)) return reply({ type: 'mode:err', error: 'Incorrect PIN.' });
     return [null, { topic: 'mode', payload: { mode: m.mode } }, null,
         { _session: msg._session, payload: JSON.stringify({ type: 'mode:ok', mode: m.mode }) }, null];
 }
+
+if (cfg.mode === 'mirror' && ['settings', 'reset', 'batch'].includes(m.type))
+    return reply({ type: m.type === 'batch' ? 'batch:err' : m.type + ':err', error: 'This is a read-only copy of the machine. Change it on the machine\'s own dashboard.' });
 
 if (m.type === 'settings' || m.type === 'reset') {   // dashboard Settings sheet (setup browsers)
     if (cfg.batchPin && String(m.pin || '') !== String(cfg.batchPin)) return reply({ type: m.type + ':err', error: 'Incorrect PIN.' });

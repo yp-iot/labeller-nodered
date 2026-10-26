@@ -2,7 +2,8 @@
 // Read-only monitoring: nothing on this tab writes to the machine.
 // data mode, switched from the dashboard (/labeller?setup) and kept across restarts:
 //   'real' = DI0/DI1 counts, no invented details | 'demo' = DI0/DI1 counts + demo inspection details | 'sim' = all simulated
-const MODE = (m => ['real', 'demo', 'sim'].includes(m) ? m : 'sim' /* default until someone picks */)(flow.get('labMode', 'file'));
+//   'mirror' = VPS only: live copy of the machine's Pi (see cloud below)
+const MODE = (m => ['real', 'demo', 'sim', 'mirror'].includes(m) ? m : 'sim' /* default until someone picks */)(flow.get('labMode', 'file'));
 flow.set('labcfg', {
     title: 'SoloSense AI',         // dashboard heading + browser tab
     line: 'Line 1',
@@ -37,6 +38,14 @@ flow.set('labcfg', {
     // chat: 'local' (on-device) or 'claude' (needs ANTHROPIC_API_KEY env var)
     chatProvider: 'local',
     claudeModel: 'claude-haiku-4-5-20251001',
+    // cloud copy: the Pi publishes to the VPS MQTT broker, a VPS in data mode 'mirror' shows and stores it (deploy/install-mqtt.sh)
+    cloud: {
+        snapEveryS: 2,             // live snapshot interval while someone has the VPS dashboard open
+        idleSnapEveryS: 60,        //   ... and while nobody does (keeps mobile data low)
+        pollS: 15,                 // VPS asks for new database rows this often
+        backfillDays: 30,          // first sync copies this much history
+        maxRows: 2000              // rows per table per request
+    },
     // Mitsubishi serial poller (node "PLC serial" is disabled until wired)
     plc: {
         protocol: 'fx-prog',       // 'fx-prog' (FX programming port) | 'mc-1c' (dedicated protocol format 1, FX-485BD/computer link)

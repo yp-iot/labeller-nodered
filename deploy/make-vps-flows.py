@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Derive flows-vps.json from flows.json: keep only the Labeller tab and the config
-nodes it uses, drop Pi-only hardware (serial PLC), and point /home/pi paths at this userDir.
+nodes it uses, drop Pi-only hardware (serial PLC) and the Pi's cloud uplink (lab_up*), enable the
+cloud mirror (lab_mir*, data mode 'Cloud copy'), and point /home/pi paths at this userDir.
 The Labeller runs on its built-in simulator (labeller-src/config.js simulate: true)."""
 import json, os
 
@@ -10,7 +11,13 @@ DROP_TYPES = {'serial request', 'serial-port', 'serial in', 'serial out'}
 
 flows = json.load(open(os.path.join(D, 'flows.json')))
 by_id = {n['id']: n for n in flows}
-keep = [n for n in flows if n['id'] in KEEP_TABS or n.get('z') in KEEP_TABS]
+pi_only = lambda n: n['id'].startswith('lab_up')
+keep = [n for n in flows if (n['id'] in KEEP_TABS or n.get('z') in KEEP_TABS) and not pi_only(n)]
+for n in keep:
+    if n['id'].startswith('lab_mir'):
+        n.pop('d', None)
+    if 'wires' in n:
+        n['wires'] = [[w for w in out if not w.startswith('lab_up')] for out in n['wires']]
 
 # pull in config nodes referenced by kept nodes (recursively)
 ids = {n['id'] for n in keep}

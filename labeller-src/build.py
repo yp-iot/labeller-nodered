@@ -5,6 +5,10 @@ import json, os, sys, urllib.request
 D = os.path.dirname(os.path.abspath(__file__))
 src = lambda f: open(os.path.join(D, f)).read()
 Z = 'tab_lab'
+CLOUD_HOST = '103.159.132.218'   # VPS public address: MQTT broker the Pi sends to (deploy/install-mqtt.sh)
+CLOUD_LINE = 'line1'              # this machine's name on the broker = CN of its client certificate
+CT = 'solosense/' + CLOUD_LINE + '/'
+CERTS = '/home/pi/.node-red/mqtt/'
 GPIO_DI_LINKOUTS = ['ed5cac9635191991', '9031ea95efdb0241', '953d87ee5e6849cb', '1f7d4606b8ef7d0d']
 nodes = []
 
@@ -86,7 +90,7 @@ http_out('lab_tagsres', 1010, 370)
 # ---------- 4. analytics ----------
 comment('lab_c4', '④ ANALYTICS — OEE, feed, AI insights, predictive alerts', '', 900, 170)
 inject('lab_tick', 'every 1 s', 620, 220, [['lab_an']], topic='tick', repeat='1', once=True, delay=1)
-fn('lab_an', 'Analytics', src('analytics.js'), 840, 240, [['lab_wsout'], ['lab_sqlw']], outputs=2)
+fn('lab_an', 'Analytics', src('analytics.js'), 840, 240, [['lab_wsout', 'lab_up'], ['lab_sqlw']], outputs=2)
 
 # ---------- 5. storage ----------
 comment('lab_c5', '⑤ STORAGE — SQLite data/labeller.db (batched 60 s, retention, size guard)', 'minute_stats, ng_events, shift_summary, alerts.\n'
@@ -139,7 +143,7 @@ add({'id': 'lab_claudereq', 'type': 'http request', 'name': 'Claude API', 'metho
      'persist': False, 'proxy': '', 'insecureHTTPParser': False, 'authType': '', 'senderr': False, 'headers': [], 'x': 1050, 'y': 650, 'wires': [['lab_claudereply']]})
 fn('lab_claudereply', 'Claude reply / fallback', src('claude_reply.js'), 1250, 650, [['lab_wsout']])
 add({'id': 'lab_wsout', 'type': 'websocket out', 'name': 'browsers', 'server': 'lab_wsl', 'client': '', 'x': 1290, 'y': 240, 'wires': []})
-add({'id': 'lab_sqlcatch', 'type': 'catch', 'name': 'SQLite write failed', 'scope': ['lab_sqlw'], 'uncaught': False, 'x': 860, 'y': 300, 'wires': [['lab_rollback']]})
+add({'id': 'lab_sqlcatch', 'type': 'catch', 'name': 'SQLite write failed', 'scope': ['lab_sqlw', 'lab_mir_sqlw'], 'uncaught': False, 'x': 860, 'y': 300, 'wires': [['lab_rollback']]})
 fn('lab_rollback', 'ROLLBACK open transaction', "// A failed statement inside BEGIN..COMMIT leaves the transaction open and blocks every later write.\n"
    "// Roll it back once (never loop on a failed ROLLBACK itself).\nif (/^\\s*ROLLBACK/i.test(msg.topic || '')) return null;\n"
    "node.warn('SQLite write failed, rolled back: ' + (msg.error && msg.error.message));\nreturn { topic: 'ROLLBACK;' };", 1070, 300, [['lab_sqlw']])
@@ -159,6 +163,53 @@ inject('lab_t_ng', '1 product NG (DI1)', 180, 1340, T, payload='{"cmd":"one","ng
 fn('lab_tester', 'DI tester', src('tester.js'), 500, 1260, [['lab_diad']],
    initialize="const s = context.get('st'); if (s) { s.on = false; context.set('st', s); }   // redeploy = line stopped",
    finalize="clearTimeout(context.get('timer'));")
+
+# ---------- 9. cloud copy (MQTT) ----------
+# Pi: "lab_up*" nodes publish to the VPS broker. VPS: "lab_mir*" nodes (disabled here, enabled by deploy/make-vps-flows.py,
+# which also drops lab_up*) show and store that data in data mode 'mirror'.
+def mqtt_in(id, name, topic, x, y, wires, broker, qos='1', d=False):
+    n = {'id': id, 'type': 'mqtt in', 'name': name, 'topic': topic, 'qos': qos, 'datatype': 'utf8', 'broker': broker, 'nl': False, 'rap': True,
+         'rh': 0, 'inputs': 0, 'x': x, 'y': y, 'wires': wires}
+    if d: n['d'] = True
+    return add(n)
+
+def mqtt_out(id, name, topic, x, y, broker, qos='1', retain='false', d=False):
+    n = {'id': id, 'type': 'mqtt out', 'name': name, 'topic': topic, 'qos': qos, 'retain': retain, 'respTopic': '', 'contentType': '', 'userProps': '',
+         'correl': '', 'expiry': '', 'broker': broker, 'x': x, 'y': y, 'wires': []}
+    if d: n['d'] = True
+    return add(n)
+
+def broker(id, name, host, port, clientid, tls='', status_topic=''):
+    st = lambda p: {'Topic': status_topic, 'Qos': '1', 'Retain': 'true', 'Payload': p, 'Msg': {}} if status_topic else {'Topic': '', 'Qos': '0', 'Retain': 'false', 'Payload': '', 'Msg': {}}
+    n = {'id': id, 'type': 'mqtt-broker', 'z': '', 'name': name, 'broker': host, 'port': port, 'tls': tls, 'clientid': clientid, 'autoConnect': True,
+         'usetls': bool(tls), 'protocolVersion': '4', 'keepalive': '60', 'cleansession': True, 'autoUnsubscribe': True, 'sessionExpiry': '', 'userProps': ''}
+    for k, p in (('birth', 'online'), ('close', 'offline'), ('will', 'offline')):
+        n.update({k + f: v for f, v in st(p).items()})
+    return add(n)
+
+add({'id': 'lab_up_tls', 'type': 'tls-config', 'z': '', 'name': 'Cloud MQTT certificates', 'cert': CERTS + 'client.crt', 'key': CERTS + 'client.key',
+     'ca': CERTS + 'ca.crt', 'certname': '', 'keyname': '', 'caname': '', 'servername': '', 'verifyservercert': True, 'alpnprotocol': ''})
+broker('lab_up_broker', 'Cloud MQTT (VPS)', CLOUD_HOST, '8883', 'solosense-' + CLOUD_LINE, tls='lab_up_tls', status_topic=CT + 'status')
+broker('lab_mir_broker', 'Local MQTT (VPS)', '127.0.0.1', '1883', 'solosense-mirror-' + CLOUD_LINE)
+
+comment('lab_c9', '⑨ CLOUD COPY — Pi → VPS over MQTT (TLS, client certificate)', 'Pi (lab_up*): snapshot -> ' + CT + 'snap (every cloud.snapEveryS while the VPS dashboard is open, else idleSnapEveryS); '
+        'answers ' + CT + 'req with new database rows on ' + CT + 'rows. Certificates in ' + CERTS + ' (deploy/install-mqtt.sh).\n'
+        'VPS (lab_mir*, disabled on the Pi): data mode "Cloud copy" shows the snapshot and keeps a copy of the database (CONFIG cloud).', 250, 1420)
+fn('lab_up', 'Uplink (Pi)', src('uplink.js'), 420, 1480, [['lab_up_snap'], ['lab_up_sql'], ['lab_up_rows']], outputs=3)
+mqtt_in('lab_up_req', 'VPS requests', CT + 'req', 170, 1460, [['lab_up']], 'lab_up_broker')
+mqtt_in('lab_up_watch', 'VPS watching', CT + 'watch', 170, 1500, [['lab_up']], 'lab_up_broker', qos='0')
+add({'id': 'lab_up_sql', 'type': 'sqlite', 'name': 'SQLite rows', 'mydb': 'lab_db', 'sqlquery': 'msg.topic', 'sql': '', 'x': 420, 'y': 1540, 'wires': [['lab_up']]})
+mqtt_out('lab_up_snap', 'snapshot', CT + 'snap', 660, 1460, 'lab_up_broker', qos='0', retain='true')
+mqtt_out('lab_up_rows', 'rows', CT + 'rows', 650, 1500, 'lab_up_broker')
+
+mqtt_in('lab_mir_in', 'machine ' + CLOUD_LINE, CT + '+', 170, 1620, [['lab_mir']], 'lab_mir_broker', d=True)
+inject('lab_mir_tick', 'every 5 s', 150, 1660, [['lab_mir']], topic='tick', repeat='5', once=True, delay=3, d=True)
+fn('lab_mir', 'Mirror (VPS)', src('mirror.js'), 400, 1640, [['lab_wsout'], ['lab_mir_sqlq'], ['lab_mir_sqlw'], ['lab_mir_req'], ['lab_mir_watch']], outputs=5)
+nodes[-1]['d'] = True
+add({'id': 'lab_mir_sqlq', 'type': 'sqlite', 'name': 'SQLite watermarks', 'mydb': 'lab_db', 'sqlquery': 'msg.topic', 'sql': '', 'd': True, 'x': 640, 'y': 1600, 'wires': [['lab_mir']]})
+add({'id': 'lab_mir_sqlw', 'type': 'sqlite', 'name': 'SQLite upsert (batch)', 'mydb': 'lab_db', 'sqlquery': 'batch', 'sql': '', 'd': True, 'x': 650, 'y': 1640, 'wires': [['lab_mir']]})
+mqtt_out('lab_mir_req', 'request rows', CT + 'req', 650, 1680, 'lab_mir_broker', d=True)
+mqtt_out('lab_mir_watch', 'watching', CT + 'watch', 640, 1720, 'lab_mir_broker', qos='0', d=True)
 
 # ---------- deploy ----------
 def login():
@@ -184,7 +235,9 @@ def call(method, path, body=None, headers=None):
         except ValueError:
             return {'text': body.decode()}
 
-cur = call('GET', '/flows')
+FF = os.path.join(os.path.dirname(D), 'flows.json')
+OFFLINE = '--file' in sys.argv   # rebuild the tab inside the repo's flows.json (the Pi's flow file) instead of the running Node-RED
+cur = {'flows': json.load(open(FF))} if OFFLINE else call('GET', '/flows')
 flows = [n for n in cur['flows'] if n.get('z') != Z and n['id'] != Z and not n['id'].startswith('lab_')]
 for n in flows:
     if n['id'] in GPIO_DI_LINKOUTS:
@@ -193,6 +246,9 @@ flows += nodes
 if '--dry' in sys.argv:
     json.dump(flows, open(os.path.join(D, 'flows.out.json'), 'w'), indent=1)
     print('dry run:', len(nodes), 'nodes'); sys.exit()
+if OFFLINE:
+    json.dump(flows, open(FF, 'w'), indent=4, ensure_ascii=False)
+    print('flows.json:', len(nodes), 'Labeller nodes,', len(flows), 'total'); sys.exit()
 res = call('POST', '/flows', {'rev': cur['rev'], 'flows': flows}, {'Node-RED-Deployment-Type': 'nodes'})
 print('deployed', len(nodes), 'nodes, rev', res.get('rev'))
 import time

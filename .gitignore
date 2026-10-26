@@ -15,3 +15,6 @@ flows-vps.json
 .flows-vps.json.backup
 flows-vps_cred.json
 .role
+mqtt/
+mqtt-ca/
+__pycache__/

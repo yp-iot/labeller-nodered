@@ -80,8 +80,15 @@ if (msg.topic === 'batch') {
 }
 const newMode = msg.topic === 'mode' && msg.payload && msg.payload.mode;
 let resetCounts = false;
-if (['real', 'demo', 'sim'].includes(newMode) && newMode !== cfg.mode) {
-    resetCounts = (newMode === 'sim') !== (cfg.mode === 'sim');   // real <-> demo keep the same DI0/DI1 counts
+const modeOk = ['real', 'demo', 'sim'].includes(newMode) || (newMode === 'mirror' && !!flow.get('labMirrorAvail'));   // mirror: VPS only
+if (modeOk && newMode !== cfg.mode) {
+    const mirror = newMode === 'mirror' || cfg.mode === 'mirror';
+    resetCounts = mirror || (newMode === 'sim') !== (cfg.mode === 'sim');   // real <-> demo keep the same DI0/DI1 counts
+    if (mirror) {   // VPS: this server's own rows and the machine's copy never mix, the Mirror reloads the copy from the Pi
+        sqlNow.push('DELETE FROM items;', 'DELETE FROM minute_stats;', 'DELETE FROM ng_events;', 'DELETE FROM alerts;', 'DELETE FROM shift_summary;', 'DELETE FROM batches;',
+            'CREATE UNIQUE INDEX IF NOT EXISTS items_mirror ON items(ts, tid, seq);');
+        P.batch = null;
+    }
     cfg.mode = newMode; cfg.simulate = newMode === 'sim';
     flow.set('labcfg', cfg);
     flow.set('labMode', newMode, 'file');
@@ -108,6 +115,10 @@ if (msg.topic === 'settings' && msg.payload && msg.payload.idealPpm) {
     flow.set('labcfg', cfg);
     flow.set('labIdealPpm', cfg.idealPpm, 'file');
     node.log('rated speed set to ' + cfg.idealPpm + ' PPM');
+}
+if (cfg.mode === 'mirror') {   // VPS copy of the machine: the Mirror node supplies snapshot + rows, nothing is counted here
+    context.set('M', M); context.set('P', P, 'file');
+    return sqlNow.length ? [null, { topic: 'BEGIN;\n' + sqlNow.join('\n') + '\nCOMMIT;' }] : null;
 }
 if (!P.batch) startBatch({ id: cfg.batch });
 if (cfg.batchSource === 'plc' && valid('batch_no') && tv('batch_no') && tv('batch_no') !== P.batch.id) startBatch({ id: tv('batch_no') });
@@ -315,7 +326,7 @@ const snap = {
     line: { title: cfg.title || 'SoloSense AI', name: cfg.line, machine: cfg.machine, product: P.batch.product || cfg.product, status, statusSince: M.statusSince, speed: r1(speed), ideal: cfg.idealPpm,
         operator: P.shift.operator, shift: { name: P.shift.name, start: P.shift.startTxt, end: P.shift.endTxt }, batch: { id: P.batch.id, product: P.batch.product || cfg.product, target: P.batch.target || 0, note: P.batch.note || '', operator: P.batch.operator || '', start: P.batch.start },
         batchSource: cfg.batchSource || 'dashboard', pinRequired: !!cfg.batchPin, products: cfg.products || [],
-        simulate: !!cfg.simulate, mode: cfg.mode, demoIdle: !!flow.get('labDemoIdle'), provider: cfg.chatProvider, ngAlarmPct: cfg.ngAlarmPct, offsetTol: cfg.offsetTolMm },
+        simulate: !!cfg.simulate, mode: cfg.mode, mirrorAvail: !!flow.get('labMirrorAvail'), demoIdle: !!flow.get('labDemoIdle'), provider: cfg.chatProvider, ngAlarmPct: cfg.ngAlarmPct, offsetTol: cfg.offsetTolMm },
     win,
     trend: M.buckets.slice(-60).map(b => ({ t: b.t, total: b.total, ng: b.ng, ngPct: b.total ? r1(100 * b.ng / b.total) : null, off: b.offN ? Math.round(100 * b.offSum / b.offN) / 100 : null })),
     feed: M.feed.slice(0, 12),
