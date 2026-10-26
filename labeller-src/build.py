@@ -161,9 +161,22 @@ fn('lab_tester', 'DI tester', src('tester.js'), 500, 1260, [['lab_diad']],
    finalize="clearTimeout(context.get('timer'));")
 
 # ---------- deploy ----------
+def login():
+    # adminAuth is on: get a bearer token using NR_ADMIN_USER / NR_ADMIN_PASS from the environment
+    pw = os.environ.get('NR_ADMIN_PASS')
+    if not pw:
+        return {}
+    body = json.dumps({'client_id': 'node-red-admin', 'grant_type': 'password', 'scope': '*',
+                       'username': os.environ.get('NR_ADMIN_USER', 'admin'), 'password': pw}).encode()
+    req = urllib.request.Request('http://127.0.0.1:1880/auth/token', method='POST', data=body, headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req) as r:
+        return {'Authorization': 'Bearer ' + json.loads(r.read())['access_token']}
+
+AUTH = login()
+
 def call(method, path, body=None, headers=None):
     req = urllib.request.Request('http://127.0.0.1:1880' + path, method=method, data=None if body is None else json.dumps(body).encode(),
-                                 headers=dict({'Content-Type': 'application/json', 'Node-RED-API-Version': 'v2'}, **(headers or {})))
+                                 headers=dict({'Content-Type': 'application/json', 'Node-RED-API-Version': 'v2'}, **AUTH, **(headers or {})))
     with urllib.request.urlopen(req) as r:
         body = r.read()
         try:
